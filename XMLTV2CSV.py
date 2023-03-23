@@ -4,7 +4,7 @@ from datetime import datetime
 import urllib.request
 import shutil
 
-XMLTVURL = 'http://192.168.4.139:34400/xmltv/xteve.xml'
+XMLTVURL = 'http://192.168.4.182:8409/iptv/xmltv.xml'
 XMLTVFile = "xmltv.xml"
 
 # Download the file from `url` and save it locally under `file_name`:
@@ -12,29 +12,24 @@ with urllib.request.urlopen(XMLTVURL) as response, open(XMLTVFile, 'wb') as out_
     shutil.copyfileobj(response, out_file)
 
 def ConvertTimeToTimeslot(datetime):
-    # timeslot 36 maps to 10:30 pm local time sync with system timezone set to 6 and daylight savings true
-    # timeslot 36 maps to 12:30 AM with system tz set to 8 (central?)
+    # Timezone 5 observe DST off puts it in sync as of 3/16 (just past spring forward)
 
-    # so 10 pm would be the 44th 30 minute slot in the day starting at 0 plus one for the :30, so 45 is 10:30 "normally"
-    # so (10 * 4) + (1) - 7 gets us to 36 from tz 6 fuck doing the math otherwise but I guess
-    # I can use that as a basis and do math from there
+    # This has 2:30 PM as timeslot 24
+    # TS 43 is midnight, or hour zero
 
-    # of course a :30 would be an even timeslot, timeslot 0 doesn't exist, 1 is :00
+    # to get TS from hour:
+    # 43 + (2 * hour) + if(minute > 29, 1, 0) ; if > 48, minus 48
+    # 8 AM =
+    # (43 + 16 + 
 
-    # HOUR TIMES FOUR for a 24 HOUR CLOCK DUMMY
-    # 2x2x2x30 mins lol
-    # so 1 + (hour * 4 + (mins > 30 ? 1 : 0))
     minAdjust = 0;
-
-    #timezone adjust
-    tzAdjust = 7;
     
-    if datetime.minute >= 30:
+    if datetime.minute >= 29:
         minAdjust = 1;
-    # due to timezone adjust, could wrap
-    adjusted = (int(datetime.hour) * 4 + (minAdjust) - tzAdjust);
-    if(adjusted >=49): adjusted = adjusted - 48;
-    return (adjusted);
+    
+    timeSlot = 40 + (2 * datetime.hour) + minAdjust
+    if(timeSlot > 48): timeSlot = timeSlot - 48
+    return (timeSlot);
 
 def GenerateTestData():
     testdata = list(range(1,48,1))
@@ -58,25 +53,28 @@ programCSV = 'timeslot,sourceIdentifier,programName,flags\n'
 channelMap = {}
 programming = []
 
+timeslotNow = ConvertTimeToTimeslot(datetime.now());
+
+print("---------------------------------------")
+print("Current timeslot: " + str(timeslotNow));
+print("---------------------------------------")
+
 for child in root:
     if(child.tag == 'channel'):
         sourceIdentifier = ''
-        channelNumber = child.attrib['id']
+        channelNumber = child.attrib['id'].split('.')[0]
         timeslotMask = ''
         callLetters = ''
 
         flags = 'none'
         for channelinfo in child:
             if(channelinfo.tag == 'display-name'):
-                channelName = channelinfo.text
-                sourceIdentifier = channelName.split(" ")[0]
+                channelName = channelinfo.text.split('.')[0]
+                sourceIdentifier = channelName.split(" ")[0].split('|')[0]
                 callLetters = sourceIdentifier
 
                 #for later
                 channelMap.update({channelNumber : callLetters});
-        
-#            print(str(sourceIdentifier) + ',' + str(channelNumber) + ',,' + str(callLetters) + ',none')
-        #channelCSV = channelCSV + str(sourceIdentifier) + ',' + str(channelNumber) + ',,' + str(callLetters) + ',none\n'
 
     elif(child.tag == 'programme'):
         sourceIdentifier = ''
@@ -85,7 +83,7 @@ for child in root:
 
         progstart = datetime.strptime(child.get('start'), '%Y%m%d%H%M%S +0000')
         progend = datetime.strptime(child.get('stop'), '%Y%m%d%H%M%S +0000')
-        channel = child.get('channel')
+        channel = str(child.get('channel')).split('.')[0] #stupid ersatz appends .etv in their channels, breaking prevue
         
         for programinfo in child:
             if(programinfo.tag == 'title'):
@@ -95,24 +93,28 @@ for child in root:
 
         # length is determined by start time - stop time
         proglen = progend - progstart;
-
+        #print(programName + ": Length: " + str(proglen) + " (" + str(progstart) + " to " + str(progend));
         # 
         programming.append([progstart, channel, programName, (proglen.seconds/60)])
 
-        # timeslot is "horizontal" - the sample file has sequential timeslot numbers, 30 mins each, skip X numbers for long
-    
-
-        #programCSV = programCSV + str(timeslot) + ',' + str(sourceIdentifier) + ',' + str(programName) + ',none\n'
-
-
-
+#for p in programming: print(p)
 # to build programcsv, start with a channel, get it's programs, ordered by date, and write a record, then deduct 30 mins from
 # total time and again until done
 
-for program in programming[:10]:
-    print("--- Slot: " + str(ConvertTimeToTimeslot(program[0])) + " (" + str(program[0]) + ") Channel: " + program[1] + " " + program[2] + " ---");
 
-    programCSV = programCSV + str(42) + ',' + str(program[1]) + ',' + str(program[2]) + ',none\n'
+# walk through channels
+# for each, select programming with that channel
+# write the top X, then next channel, ez, except it also
+# needs to factor length
+
+
+    
+for program in programming:
+    programCSV = programCSV + str(ConvertTimeToTimeslot(program[0])) + ',' + str(program[1]).split('|')[0] + ',' + str(program[2]) + ',none\n'
+
+    #print("--- Slot: " + str(ConvertTimeToTimeslot(program[0])) + " (" + str(program[0]) + ") Channel: " + program[1] + " " + program[2] + " ---");
+
+    #programCSV = programCSV + str(ConvertTimeToTimeslot(program[0])) + ',' + str(program[1]).split('|')[0] + ',' + str(program[2]) + ',none\n'
 
 for channel in channelMap:
     print(channel, channelMap[channel]);
